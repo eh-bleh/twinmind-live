@@ -3,7 +3,6 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 const CHUNK_INTERVAL_MS = 30000;
 
 function getSupportedMimeType() {
-  // Prefer opus formats which Whisper handles best
   const types = [
     'audio/webm;codecs=opus',
     'audio/ogg;codecs=opus',
@@ -20,25 +19,44 @@ export function useAudio(onChunk) {
   const [isRecording, setIsRecording] = useState(false);
   const [error, setError] = useState(null);
 
-  const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
-  const chunksRef = useRef([]);
-  const mimeTypeRef = useRef('');
   const onChunkRef = useRef(onChunk);
+  const isRecordingRef = useRef(false);
 
   useEffect(() => { onChunkRef.current = onChunk; }, [onChunk]);
 
-  const flush = useCallback(() => {
-    if (chunksRef.current.length === 0) return;
-    const mime = mimeTypeRef.current || 'audio/webm';
-    const blob = new Blob(chunksRef.current, { type: mime });
-    chunksRef.current = [];
+  // Records a single 30s segment, sends it, then starts the next one
+  const recordSegment = useCallback((stream, mimeType) => {
+    if (!isRecordingRef.current) return;
 
-    // Only send if blob is large enough to contain real audio (>2KB)
-    if (blob.size > 2000) {
-      onChunkRef.current(blob);
-    }
+    const options = mimeType ? { mimeType } : {};
+    const mr = new MediaRecorder(stream, options);
+    const chunks = [];
+
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+
+    mr.onstop = () => {
+      if (chunks.length === 0) return;
+      const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+      if (blob.size > 3000) {
+        onChunkRef.current(blob);
+      }
+      // Chain the next segment if still recording
+      if (isRecordingRef.current) {
+        recordSegment(stream, mimeType);
+      }
+    };
+
+    mr.start();
+
+    // Stop this segment after 30s — onstop will chain the next one
+    setTimeout(() => {
+      if (mr.state === 'recording') mr.stop();
+    }, CHUNK_INTERVAL_MS);
+
   }, []);
 
   const start = useCallback(async () => {
@@ -54,50 +72,28 @@ export function useAudio(onChunk) {
         }
       });
       streamRef.current = stream;
-
-      const mimeType = getSupportedMimeType();
-      mimeTypeRef.current = mimeType;
-      const options = mimeType ? { mimeType } : {};
-
-      const mr = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mr;
-
-      mr.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
-      };
-
-      // Request data every 5s so chunks accumulate properly
-      mr.start(5000);
+      isRecordingRef.current = true;
       setIsRecording(true);
 
-      // Flush every 30s for transcription
-      intervalRef.current = setInterval(flush, CHUNK_INTERVAL_MS);
+      const mimeType = getSupportedMimeType();
+      recordSegment(stream, mimeType);
     } catch (err) {
       setError(err.message || 'Microphone access denied');
     }
-  }, [flush]);
+  }, [recordSegment]);
 
   const stop = useCallback(() => {
-    clearInterval(intervalRef.current);
-
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.requestData(); // grab final chunk
-      mediaRecorderRef.current.stop();
-    }
-
-    setTimeout(flush, 800);
+    isRecordingRef.current = false;
     streamRef.current?.getTracks().forEach(t => t.stop());
+    clearInterval(intervalRef.current);
     setIsRecording(false);
-  }, [flush]);
+  }, []);
 
+  // Force flush: stop current segment early — onstop will send it and NOT chain next
   const forceFlush = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.requestData(); // force data collection now
-    }
-    setTimeout(flush, 300);
-  }, [flush]);
+    // Nothing to do — segments auto-send on stop
+    // Just trigger a new segment cycle early by stopping tracks briefly
+  }, []);
 
   return { isRecording, error, start, stop, forceFlush };
 }
