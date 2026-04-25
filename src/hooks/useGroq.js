@@ -5,12 +5,33 @@ const GROQ_BASE = 'https://api.groq.com/openai/v1';
 const TRANSCRIPTION_MODEL = 'whisper-large-v3';
 const CHAT_MODEL = 'openai/gpt-oss-120b';
 
+// Robustly extract suggestions array from any JSON shape the model returns
+function parseSuggestions(raw) {
+  // Strip markdown code fences if present
+  const cleaned = raw.replace(/```json|```/gi, '').trim();
+  const parsed = JSON.parse(cleaned);
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed.suggestions)) return parsed.suggestions;
+  // Sometimes model wraps in a different key — find first array value
+  for (const val of Object.values(parsed)) {
+    if (Array.isArray(val)) return val;
+  }
+  throw new Error('Failed to find suggestions array in response');
+}
+
 export function useGroq(apiKey) {
+
   // Transcribe an audio blob via Whisper
   const transcribe = useCallback(async (audioBlob) => {
     if (!apiKey) throw new Error('No API key set');
+
+    // Use the detected mime type from the blob, fallback to webm
+    const ext = audioBlob.type.includes('mp4') ? 'audio.mp4'
+      : audioBlob.type.includes('ogg') ? 'audio.ogg'
+      : 'audio.webm';
+
     const form = new FormData();
-    form.append('file', audioBlob, 'audio.webm');
+    form.append('file', audioBlob, ext);
     form.append('model', TRANSCRIPTION_MODEL);
     form.append('response_format', 'text');
 
@@ -31,8 +52,6 @@ export function useGroq(apiKey) {
   // Generate suggestions (non-streaming, returns parsed array)
   const getSuggestions = useCallback(async (transcript, prompt, contextWindow) => {
     if (!apiKey) throw new Error('No API key set');
-
-    // Use only the last N characters of the transcript
     const context = transcript.slice(-contextWindow);
 
     const res = await fetch(`${GROQ_BASE}/chat/completions`, {
@@ -43,18 +62,12 @@ export function useGroq(apiKey) {
       },
       body: JSON.stringify({
         model: CHAT_MODEL,
-        max_tokens: 600,
+        max_tokens: 800,
         temperature: 0.4,
         response_format: { type: 'json_object' },
         messages: [
-          {
-            role: 'system',
-            content: prompt,
-          },
-          {
-            role: 'user',
-            content: `TRANSCRIPT:\n${context}\n\nReturn exactly 3 suggestions as JSON.`,
-          },
+          { role: 'system', content: prompt },
+          { role: 'user', content: `TRANSCRIPT:\n${context}\n\nReturn exactly 3 suggestions as JSON. You MUST include exactly 3 items in the suggestions array.` },
         ],
       }),
     });
@@ -66,9 +79,14 @@ export function useGroq(apiKey) {
 
     const data = await res.json();
     const raw = data.choices[0].message.content;
-    const parsed = JSON.parse(raw);
-    // Accept either { suggestions: [...] } or [...] directly
-    return Array.isArray(parsed) ? parsed : parsed.suggestions;
+
+    try {
+      const suggestions = parseSuggestions(raw);
+      if (!suggestions?.length) throw new Error('Empty suggestions array');
+      return suggestions;
+    } catch (e) {
+      throw new Error(`Failed to generate JSON. Please adjust your prompt. See 'failed_generation' for more details.`);
+    }
   }, [apiKey]);
 
   // Expand a clicked suggestion using the detail prompt (streaming)
@@ -101,32 +119,12 @@ export function useGroq(apiKey) {
       throw new Error(err?.error?.message || `Detail fetch failed: ${res.status}`);
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let full = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-      for (const line of lines) {
-        const json = line.slice(6);
-        if (json === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(json);
-          const delta = parsed.choices?.[0]?.delta?.content || '';
-          if (delta) { full += delta; onChunk(delta); }
-        } catch { /* skip */ }
-      }
-    }
-    return full;
+    return streamResponse(res, onChunk);
   }, [apiKey]);
 
-  // Send a chat message (streaming), calls onChunk(delta) as tokens arrive
+  // Send a chat message (streaming)
   const chat = useCallback(async (messages, systemPrompt, transcript, contextWindow, onChunk) => {
     if (!apiKey) throw new Error('No API key set');
-
     const context = transcript.slice(-contextWindow);
     const system = `${systemPrompt}\n\nCURRENT TRANSCRIPT CONTEXT:\n${context}`;
 
@@ -153,33 +151,32 @@ export function useGroq(apiKey) {
       throw new Error(err?.error?.message || `Chat failed: ${res.status}`);
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let full = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-      for (const line of lines) {
-        const json = line.slice(6);
-        if (json === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(json);
-          const delta = parsed.choices?.[0]?.delta?.content || '';
-          if (delta) {
-            full += delta;
-            onChunk(delta);
-          }
-        } catch {
-          // skip malformed SSE lines
-        }
-      }
-    }
-
-    return full;
+    return streamResponse(res, onChunk);
   }, [apiKey]);
 
   return { transcribe, getSuggestions, expandSuggestion, chat };
+}
+
+// Shared SSE stream reader
+async function streamResponse(res, onChunk) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let full = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
+    for (const line of lines) {
+      const json = line.slice(6);
+      if (json === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(json);
+        const delta = parsed.choices?.[0]?.delta?.content || '';
+        if (delta) { full += delta; onChunk(delta); }
+      } catch { /* skip malformed SSE */ }
+    }
+  }
+  return full;
 }
