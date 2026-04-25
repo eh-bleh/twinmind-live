@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Mic, MicOff, Square } from 'lucide-react';
+import { Mic, Square } from 'lucide-react';
 
 export function TranscriptColumn({ isRecording, transcriptBlocks, onStart, onStop, micError }) {
   const bottomRef = useRef(null);
@@ -16,34 +16,22 @@ export function TranscriptColumn({ isRecording, transcriptBlocks, onStart, onSto
       </div>
 
       <div className="col-body">
-        {/* Mic control */}
         <button
           className={`mic-btn ${isRecording ? 'recording' : ''}`}
           onClick={isRecording ? onStop : onStart}
         >
           {isRecording ? (
-            <>
-              <div className="mic-dot" />
-              <Square size={13} />
-              STOP RECORDING
-            </>
+            <><div className="mic-dot" /><Square size={13} />STOP RECORDING</>
           ) : (
-            <>
-              <Mic size={13} />
-              START RECORDING
-            </>
+            <><Mic size={13} />START RECORDING</>
           )}
         </button>
 
         {micError && (
           <div style={{
-            padding: '8px 12px',
-            borderRadius: '6px',
-            background: 'rgba(255,68,68,0.1)',
-            border: '1px solid rgba(255,68,68,0.3)',
-            color: '#ff6b6b',
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
+            padding: '8px 12px', borderRadius: '6px',
+            background: 'rgba(255,68,68,0.1)', border: '1px solid rgba(255,68,68,0.3)',
+            color: '#ff6b6b', fontSize: '11px', fontFamily: 'var(--font-mono)',
           }}>
             ⚠ {micError}
           </div>
@@ -52,19 +40,29 @@ export function TranscriptColumn({ isRecording, transcriptBlocks, onStart, onSto
         {transcriptBlocks.length === 0 ? (
           <div className="empty-state" style={{ flex: 1 }}>
             <div className="empty-state-icon">🎙</div>
-            <div className="empty-state-text">
-              Press record to begin.<br />
-              Transcript appears every ~30s.
-            </div>
+            <div className="empty-state-text">Press record to begin.<br />Transcript appears every ~30s.</div>
           </div>
         ) : (
           transcriptBlocks.map((block, i) => (
-            <div
-              key={block.id}
-              className={`transcript-block ${i === transcriptBlocks.length - 1 ? 'latest' : ''}`}
-            >
-              <div className="transcript-timestamp">{block.timestamp}</div>
-              {block.text}
+            <div key={block.id} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', animation: 'fadeIn 0.3s ease' }}>
+              {/* Timestamp inline with text — matches prototype */}
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '9px',
+                color: 'var(--text-muted)',
+                whiteSpace: 'nowrap',
+                paddingTop: '3px',
+                flexShrink: 0,
+              }}>
+                {block.timestamp}
+              </span>
+              <span style={{
+                fontSize: '13px',
+                color: i === transcriptBlocks.length - 1 ? 'var(--text-primary)' : 'var(--text-secondary)',
+                lineHeight: '1.7',
+              }}>
+                {block.text}
+              </span>
             </div>
           ))
         )}

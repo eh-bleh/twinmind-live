@@ -10,29 +10,20 @@ const TYPE_LABELS = {
 
 function SuggestionCard({ suggestion, onSelect, isActive }) {
   const meta = TYPE_LABELS[suggestion.type] || { label: suggestion.type, cls: 'type-answer' };
-
   return (
-    <button
-      className={`suggestion-card ${isActive ? 'active' : ''}`}
-      onClick={() => onSelect(suggestion)}
-    >
+    <button className={`suggestion-card ${isActive ? 'active' : ''}`} onClick={() => onSelect(suggestion)}>
       <div className={`suggestion-type ${meta.cls}`}>{meta.label}</div>
       <div className="suggestion-preview">{suggestion.preview}</div>
     </button>
   );
 }
 
-export function SuggestionsColumn({ batches, isLoading, onRefresh, onSelectSuggestion, activeSuggestion }) {
+export function SuggestionsColumn({ batches, isLoading, onRefresh, onSelectSuggestion, activeSuggestion, countdown, isRecording }) {
   return (
     <div className="col">
       <div className="col-header">
         <span className="col-title">Live Suggestions</span>
-        <button
-          className="btn btn-icon"
-          onClick={onRefresh}
-          disabled={isLoading}
-          title="Refresh suggestions"
-        >
+        <button className="btn btn-icon" onClick={onRefresh} disabled={isLoading} title="Reload suggestions">
           <RefreshCw size={12} style={{ animation: isLoading ? 'spin 1s linear infinite' : 'none' }} />
         </button>
       </div>
@@ -40,6 +31,39 @@ export function SuggestionsColumn({ batches, isLoading, onRefresh, onSelectSugge
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
+
+      {/* Reload button + countdown — matches prototype */}
+      <div style={{ padding: '10px 16px 0', flexShrink: 0 }}>
+        <button
+          onClick={onRefresh}
+          disabled={isLoading}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            width: '100%',
+            padding: '8px 14px',
+            borderRadius: '20px',
+            border: '1px solid var(--border-light)',
+            background: 'var(--bg-card)',
+            color: 'var(--text-secondary)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '11px',
+            cursor: 'pointer',
+            transition: 'all 0.15s',
+          }}
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <RefreshCw size={11} style={{ animation: isLoading ? 'spin 1s linear infinite' : 'none' }} />
+            Reload suggestions
+          </span>
+          {isRecording && !isLoading && (
+            <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+              auto-refresh in {countdown}s
+            </span>
+          )}
+        </button>
+      </div>
 
       <div className="col-body">
         {isLoading && (
@@ -55,16 +79,26 @@ export function SuggestionsColumn({ batches, isLoading, onRefresh, onSelectSugge
           <div className="empty-state" style={{ flex: 1 }}>
             <div className="empty-state-icon">💡</div>
             <div className="empty-state-text">
-              Suggestions appear once<br />
-              the transcript has content.
+              Suggestions appear once<br />the transcript has content.
             </div>
           </div>
         )}
 
         {batches.map((batch, batchIdx) => (
-          <div key={batch.id} className="suggestion-batch">
-            <div className="batch-label">
-              {batchIdx === 0 ? `LATEST · ${batch.timestamp}` : batch.timestamp}
+          <div
+            key={batch.id}
+            className="suggestion-batch"
+            style={{ opacity: batchIdx === 0 ? 1 : Math.max(0.35, 1 - batchIdx * 0.2) }}
+          >
+            {/* Batch separator label matching prototype style */}
+            <div className="batch-label" style={{
+              textAlign: 'center',
+              borderTop: batchIdx > 0 ? '1px solid var(--border)' : 'none',
+              paddingTop: batchIdx > 0 ? '12px' : '0',
+            }}>
+              {batchIdx === 0
+                ? `LATEST · ${batch.timestamp}`
+                : `— BATCH ${batches.length - batchIdx} · ${batch.timestamp} —`}
             </div>
             {batch.suggestions.map((s, i) => (
               <SuggestionCard
